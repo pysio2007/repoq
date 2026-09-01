@@ -35,9 +35,12 @@ clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
 
 PREFIX ?= /usr/local
+MANDIR ?= $(PREFIX)/share/man/man1
 
 install: $(TARGET)
 	install -Dm755 $(TARGET) $(PREFIX)/bin/$(TARGET)
+	install -Dm644 man/repoq.1 $(MANDIR)/repoq.1
 
 uninstall:
 	rm -f $(PREFIX)/bin/$(TARGET)
+	rm -f $(MANDIR)/repoq.1

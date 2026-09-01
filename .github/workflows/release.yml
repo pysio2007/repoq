@@ -142,11 +142,14 @@ jobs:
           case "${{ matrix.distro.fmt }}" in
             deb)
               DEP=$(dpkg -S "$LIBPATH" | cut -d: -f1)
-              mkdir -p pkgroot/DEBIAN pkgroot/usr/bin \
+              mkdir -p pkgroot/DEBIAN pkgroot/usr/bin pkgroot/usr/share/man/man1 \
                 pkgroot/usr/share/licenses/repoq pkgroot/usr/share/doc/repoq
               install -Dm755 repoq pkgroot/usr/bin/repoq
               install -Dm644 LICENSE pkgroot/usr/share/licenses/repoq/LICENSE
               install -Dm644 README.md pkgroot/usr/share/doc/repoq/README.md
+              # Debian policy requires man pages to be gzip-compressed;
+              # dpkg-deb, unlike rpmbuild, does not do this automatically.
+              gzip -9 -n -c man/repoq.1 > pkgroot/usr/share/man/man1/repoq.1.gz
           cat > pkgroot/DEBIAN/control <<CONTROL
           Package: repoq
           Version: $VERSION
@@ -178,13 +181,15 @@ jobs:
           A lightweight command-line client for the Repology API.
 
           %install
-          mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/licenses/repoq
+          mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/licenses/repoq %{buildroot}/usr/share/man/man1
           install -Dm755 $GITHUB_WORKSPACE/src-tree/repoq %{buildroot}/usr/bin/repoq
           install -Dm644 $GITHUB_WORKSPACE/src-tree/LICENSE %{buildroot}/usr/share/licenses/repoq/LICENSE
+          install -Dm644 $GITHUB_WORKSPACE/src-tree/man/repoq.1 %{buildroot}/usr/share/man/man1/repoq.1
 
           %files
           /usr/bin/repoq
           /usr/share/licenses/repoq/LICENSE
+          /usr/share/man/man1/repoq.1*
           SPEC
               rpmbuild --define "_topdir $PWD/rpmbuild" -bb rpmbuild/SPECS/repoq.spec
               built=$(find rpmbuild/RPMS -name '*.rpm')

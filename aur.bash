@@ -73,6 +73,7 @@ package() {
     install -Dm755 repoq "\$pkgdir/usr/bin/repoq"
     install -Dm644 LICENSE "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
     install -Dm644 README.md "\$pkgdir/usr/share/doc/\$pkgname/README.md"
+    install -Dm644 man/repoq.1 "\$pkgdir/usr/share/man/man1/repoq.1"
 }
 EOF
 

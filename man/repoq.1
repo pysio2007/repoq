@@ -1,0 +1,107 @@
+.TH REPOQ 1 "2026-09-01" "repoq 0.2.1" "User Commands"
+.SH NAME
+repoq \- query the Repology API from the command line
+.SH SYNOPSIS
+.B repoq
+.I project-name
+[\fIoptions\fR]
+.br
+.B repoq
+\fB\-\-search\fR \fIsubstring\fR [\fIoptions\fR]
+.br
+.B repoq
+\fB\-\-outdated\fR [\fB\-\-search\fR \fIsubstring\fR] [\fIoptions\fR]
+.SH DESCRIPTION
+.B repoq
+is a lightweight command-line client for the Repology API
+(\fIhttps://repology.org\fR). It shows which repositories package a given
+project and at what version, or searches for projects by substring.
+.SH MODES
+.TP
+.B repoq \fIproject-name\fR
+Show packages for a single Repology project.
+.TP
+.B repoq \-\-search \fIsubstring\fR
+Search for projects whose name contains \fIsubstring\fR.
+.TP
+.B repoq \-\-outdated
+List outdated projects (can be combined with \fB\-\-search\fR).
+.SH OPTIONS
+.TP
+\fB\-r\fR, \fB\-\-repo\fR \fIname\fR
+Only show packages from repository \fIname\fR. Only valid together with a
+single project name.
+.TP
+\fB\-s\fR, \fB\-\-search\fR \fIsubstring\fR
+Search projects by substring (batch mode).
+.TP
+\fB\-o\fR, \fB\-\-outdated\fR
+Only show outdated/legacy projects (batch mode).
+.TP
+\fB\-l\fR, \fB\-\-limit\fR \fIN\fR
+Limit the number of projects shown in batch mode (default: 200, which is
+one API page).
+.TP
+\fB\-j\fR, \fB\-\-json\fR
+Print the raw JSON response instead of a table.
+.TP
+\fB\-n\fR, \fB\-\-no\-color\fR
+Disable colored output. Shorthand for \fB\-\-color=never\fR.
+.TP
+\fB\-\-color\fR[=\fIWHEN\fR]
+Colorize output. \fIWHEN\fR is one of \fIalways\fR (the default, so output
+survives being piped into tools like \fBbat\fR(1)), \fInever\fR, or
+\fIauto\fR (color only when standard output is a terminal). A bare
+\fB\-\-color\fR means \fIalways\fR.
+.TP
+\fB\-u\fR, \fB\-\-unique\fR
+Collapse rows that share the same repo/version/status (hides sibling
+sub-packages, e.g. "foo-bgpd" vs "foo-ospfd" from the same source
+package).
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Show a help message and exit.
+.TP
+\fB\-v\fR, \fB\-\-version\fR
+Show version information, check GitHub for a newer release, and exit.
+.SH EXAMPLES
+.TP
+repoq firefox
+.TP
+repoq firefox \-\-repo aosc
+.TP
+repoq \-\-search fire \-\-limit 20
+.TP
+repoq \-\-search fire \-\-outdated
+.TP
+repoq firefox \-\-json | jq .
+.TP
+repoq firefox \-\-color=always | bat
+.SH NOTES
+A single repo can ship many sibling packages built from the same source
+(e.g. "frr", "frr-bgpd", "frr-ospfd", ...), which show up as separate rows
+with the same version/status; the PACKAGE column identifies which is
+which, and \fB\-\-unique\fR can collapse them if you don't care.
+.PP
+For a single-project query, repoq also prints the version Repology tracks
+as newest for that project and a link to its Repology project page, ahead
+of the table.
+.PP
+repoq respects Repology's API terms of use: requests are throttled to at
+most one per second, and a custom User-Agent identifying this tool and its
+source repository is sent with every request.
+.SH EXIT STATUS
+.TP
+0
+Success.
+.TP
+1
+The project was not found, or a request to Repology (or, for
+\fB\-\-version\fR, GitHub) failed.
+.TP
+2
+Invalid command-line usage.
+.SH SEE ALSO
+Source and issue tracker: \fIhttps://github.com/pysio2007/repoq\fR
+.SH AUTHOR
+pysio

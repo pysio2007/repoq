@@ -18,7 +18,8 @@ cJSON is vendored under `third_party/cjson/`; no extra install needed.
 
 ```sh
 make
-make install    # optional, installs to $PREFIX/bin (default /usr/local/bin)
+make install    # optional, installs the binary to $PREFIX/bin and a man
+                # page to $PREFIX/share/man/man1 (default /usr/local)
 ```
 
 ## Usage
@@ -46,7 +47,8 @@ repoq firefox --json | jq .            # raw JSON output
   -o, --outdated         Only show outdated/legacy projects (batch mode).
   -l, --limit <N>        Limit results in batch mode (default: 200).
   -j, --json             Print raw JSON instead of a table.
-  -n, --no-color         Disable colored output.
+  -n, --no-color         Disable colored output. Shorthand for --color=never.
+  --color[=WHEN]         always (default), never, or auto.
   -u, --unique           Collapse rows with the same repo/version/status.
   -h, --help             Show help and exit.
   -v, --version          Show version and exit.
