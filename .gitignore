@@ -1,0 +1,6 @@
+/build/
+/repoq
+*.o
+*.swp
+.vscode/
+.idea/

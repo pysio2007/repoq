@@ -1,0 +1,4 @@
+-std=c11
+-Isrc
+-Ithird_party/cjson
+-D_POSIX_C_SOURCE=200809L
