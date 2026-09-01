@@ -26,7 +26,12 @@ if [[ -z "$pkgver" ]]; then
     exit 1
 fi
 
-tarball_url="$pkgurl/archive/refs/tags/v${pkgver}.tar.gz"
+# NOT GitHub's auto-generated /archive/refs/tags/ archive: that endpoint is
+# not guaranteed byte-stable across regenerations (observed 3 different
+# sha256 sums for the same tag within an hour). Use the release asset
+# built once by .github/workflows/release.yml via `git archive` instead,
+# which is a fixed blob GitHub will never regenerate.
+tarball_url="$pkgurl/releases/download/v${pkgver}/${pkgname}-${pkgver}.tar.gz"
 
 echo "==> Packaging $pkgname $pkgver"
 echo "==> Fetching source tarball to compute checksum: $tarball_url"
@@ -36,7 +41,8 @@ trap 'rm -f "$tmpfile"' EXIT
 
 if ! curl -fsSL "$tarball_url" -o "$tmpfile"; then
     echo "error: failed to download $tarball_url" >&2
-    echo "       is tag v${pkgver} pushed to GitHub?" >&2
+    echo "       has the release workflow finished for tag v${pkgver}?" >&2
+    echo "       (.github/workflows/release.yml, triggered by pushing that tag)" >&2
     exit 1
 fi
 
@@ -54,7 +60,7 @@ arch=('x86_64' 'aarch64')
 url="$pkgurl"
 license=('Apache-2.0')
 depends=('curl')
-source=("\$pkgname-\$pkgver.tar.gz::$pkgurl/archive/refs/tags/v\$pkgver.tar.gz")
+source=("\$pkgname-\$pkgver.tar.gz::$pkgurl/releases/download/v\$pkgver/\$pkgname-\$pkgver.tar.gz")
 sha256sums=('$sha256')
 
 build() {

@@ -1,0 +1,227 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build and publish, e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  source-tarball:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+      tarball: ${{ steps.archive.outputs.tarball }}
+    steps:
+      - name: Determine tag
+        id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Read version and verify it matches the tag
+        id: ver
+        run: |
+          version=$(grep -oP '(?<=REPOQ_VERSION ")[^"]+' src/version.h)
+          tag="${{ steps.tag.outputs.tag }}"
+          if [ "v$version" != "$tag" ]; then
+            echo "::error::tag $tag does not match REPOQ_VERSION $version in src/version.h"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Deliberately NOT using GitHub's auto-generated archive URL as the
+      # canonical source artifact: it is not guaranteed byte-stable across
+      # regenerations (observed 3 different sha256 sums for the same tag
+      # within an hour). git archive run once here and uploaded as a release
+      # asset is a fixed blob GitHub will never regenerate.
+      - name: Build reproducible source tarball
+        id: archive
+        run: |
+          out="repoq-${{ steps.ver.outputs.version }}.tar.gz"
+          git archive --format=tar.gz --prefix="repoq-${{ steps.ver.outputs.version }}/" -o "$out" HEAD
+          echo "tarball=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.archive.outputs.tarball }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-source-tarball
+          path: ${{ steps.archive.outputs.tarball }}
+
+  build-packages:
+    needs: source-tarball
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        distro:
+          - name: debian
+            image: 'debian:13'
+            fmt: deb
+          - name: ubuntu
+            image: 'ubuntu:26.04'
+            fmt: deb
+          - name: fedora
+            image: 'fedora:44'
+            fmt: rpm
+          - name: opensuse
+            image: 'opensuse/leap:16.0'
+            fmt: rpm
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    container: ${{ matrix.distro.image }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-source-tarball
+
+      - name: Extract source
+        run: |
+          mkdir src-tree
+          tar xzf "${{ needs.source-tarball.outputs.tarball }}" -C src-tree --strip-components=1
+
+      - name: Install build dependencies
+        working-directory: src-tree
+        run: |
+          set -e
+          case "${{ matrix.distro.name }}" in
+            debian|ubuntu)
+              apt-get update
+              apt-get install -y --no-install-recommends gcc make libcurl4-openssl-dev
+              ;;
+            fedora)
+              dnf install -y gcc make libcurl-devel rpm-build
+              ;;
+            opensuse)
+              zypper --non-interactive install gcc make libcurl-devel rpm-build
+              ;;
+          esac
+
+      - name: Build
+        working-directory: src-tree
+        run: make
+
+      # Runtime dependency name is looked up on the target distro itself
+      # (via dpkg -S / rpm -qf against the libcurl.so actually linked)
+      # instead of being hardcoded, since the package providing libcurl
+      # differs across distros and releases (e.g. Ubuntu's libcurl4t64).
+      - name: Package
+        id: pkg
+        working-directory: src-tree
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.source-tarball.outputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          DISTRO="${{ matrix.distro.name }}"
+          LIBPATH=$(ldd repoq | awk '/libcurl/{print $3; exit}')
+
+          case "${{ matrix.distro.fmt }}" in
+            deb)
+              DEP=$(dpkg -S "$LIBPATH" | cut -d: -f1)
+              mkdir -p pkgroot/DEBIAN pkgroot/usr/bin \
+                pkgroot/usr/share/licenses/repoq pkgroot/usr/share/doc/repoq
+              install -Dm755 repoq pkgroot/usr/bin/repoq
+              install -Dm644 LICENSE pkgroot/usr/share/licenses/repoq/LICENSE
+              install -Dm644 README.md pkgroot/usr/share/doc/repoq/README.md
+          cat > pkgroot/DEBIAN/control <<CONTROL
+          Package: repoq
+          Version: $VERSION
+          Section: utils
+          Priority: optional
+          Architecture: $ARCH
+          Depends: $DEP
+          Maintainer: pysio <mcyouyousever@gmail.com>
+          Description: Lightweight command-line client for the Repology API
+          CONTROL
+              out="repoq_${VERSION}_${ARCH}_${DISTRO}.deb"
+              dpkg-deb --build --root-owner-group pkgroot "$out"
+              echo "file=src-tree/$out" >> "$GITHUB_OUTPUT"
+              ;;
+            rpm)
+              DEP=$(rpm -qf "$LIBPATH" --qf '%{NAME}\n')
+              RPM_ARCH=$(uname -m)
+              mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cat > rpmbuild/SPECS/repoq.spec <<SPEC
+          Name: repoq
+          Version: $VERSION
+          Release: 1
+          Summary: Lightweight command-line client for the Repology API
+          License: Apache-2.0
+          URL: https://github.com/pysio2007/repoq
+          Requires: $DEP
+
+          %description
+          A lightweight command-line client for the Repology API.
+
+          %install
+          mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/licenses/repoq
+          install -Dm755 $GITHUB_WORKSPACE/src-tree/repoq %{buildroot}/usr/bin/repoq
+          install -Dm644 $GITHUB_WORKSPACE/src-tree/LICENSE %{buildroot}/usr/share/licenses/repoq/LICENSE
+
+          %files
+          /usr/bin/repoq
+          /usr/share/licenses/repoq/LICENSE
+          SPEC
+              rpmbuild --define "_topdir $PWD/rpmbuild" -bb rpmbuild/SPECS/repoq.spec
+              built=$(find rpmbuild/RPMS -name '*.rpm')
+              out="repoq-${VERSION}-1.${DISTRO}.${RPM_ARCH}.rpm"
+              cp "$built" "$out"
+              echo "file=src-tree/$out" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.pkg.outputs.file }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.distro.name }}-${{ matrix.arch }}
+          path: ${{ steps.pkg.outputs.file }}
+
+  release:
+    needs: [source-tarball, build-packages]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ needs.source-tarball.outputs.tag }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$TAG" dist/* --repo "${{ github.repository }}" \
+              --title "$TAG" --generate-notes
+          fi
