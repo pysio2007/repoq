@@ -134,7 +134,10 @@ jobs:
           VERSION="${{ needs.source-tarball.outputs.version }}"
           ARCH="${{ matrix.arch }}"
           DISTRO="${{ matrix.distro.name }}"
-          LIBPATH=$(ldd repoq | awk '/libcurl/{print $3; exit}')
+          # readlink -f: on merged-/usr systems ldd reports /lib/... which is
+          # just a symlink to /usr/lib/...; dpkg/rpm's file databases record
+          # the canonical path, so an unresolved symlink path won't match.
+          LIBPATH=$(readlink -f "$(ldd repoq | awk '/libcurl/{print $3; exit}')")
 
           case "${{ matrix.distro.fmt }}" in
             deb)
