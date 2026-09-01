@@ -38,4 +38,10 @@ int http_get(const char *url, http_response_t *out, char *errbuf, size_t errbuf_
  * http_get(). Safe to call on a zeroed or already-freed struct. */
 void http_response_free(http_response_t *resp);
 
+/* Percent-encodes a string for safe use as a single URL path segment or
+ * query parameter value, per RFC 3986 (unreserved characters are passed
+ * through unchanged, everything else becomes %XX). Returns a newly
+ * allocated string (caller must free()), or NULL on allocation failure. */
+char *url_encode(const char *s);
+
 #endif /* REPOQ_HTTP_H */

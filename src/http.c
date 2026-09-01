@@ -1,3 +1,9 @@
+/* Must be defined before any system header is included (glibc hides
+ * CLOCK_MONOTONIC otherwise); set on the command line too (see Makefile /
+ * compile_flags.txt), but repeated here so this file is self-contained
+ * for tools that don't pick those up. */
+#define _POSIX_C_SOURCE 200809L
+
 #include "http.h"
 #include "version.h"
 
@@ -174,4 +180,28 @@ void http_response_free(http_response_t *resp) {
     resp->data = NULL;
     resp->size = 0;
     resp->status_code = 0;
+}
+
+char *url_encode(const char *s) {
+    if (!s) {
+        return strdup("");
+    }
+    size_t len = strlen(s);
+    char *out = malloc(len * 3 + 1);
+    if (!out) {
+        return NULL;
+    }
+    size_t o = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out[o++] = (char)c;
+        } else {
+            snprintf(out + o, 4, "%%%02X", c);
+            o += 3;
+        }
+    }
+    out[o] = '\0';
+    return out;
 }

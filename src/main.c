@@ -42,7 +42,10 @@ static void print_help(void) {
            "  -l, --limit <N>         Limit the number of projects shown in batch mode\n"
            "                          (default: %d, which is one API page).\n"
            "  -j, --json              Print the raw JSON response instead of a table.\n"
-           "  -n, --no-color          Disable colored output.\n"
+           "  -n, --no-color          Disable colored output. Shorthand for --color=never.\n"
+           "  --color[=WHEN]          Colorize output: 'always' (the default, so it also\n"
+           "                          survives being piped into e.g. `bat`), 'never', or\n"
+           "                          'auto' (color only on a terminal).\n"
            "  -u, --unique            Collapse rows that share the same repo/version/status\n"
            "                          (hides sibling sub-packages, e.g. \"foo-bgpd\" vs\n"
            "                          \"foo-ospfd\" from the same source package).\n"
@@ -55,6 +58,7 @@ static void print_help(void) {
            "  repoq --search fire --limit 20\n"
            "  repoq --search fire --outdated\n"
            "  repoq firefox --json | jq .\n"
+           "  repoq firefox --color=always | bat\n"
            "\n"
            "Notes:\n"
            "  A single repo can ship many sibling packages built from the same source\n"
@@ -68,36 +72,71 @@ static void print_help(void) {
            DEFAULT_SEARCH_LIMIT);
 }
 
-static void print_version(void) {
-    printf("repoq %s (%s)\n", REPOQ_VERSION, REPOQ_REPO_URL);
+/* Compares two dotted-numeric versions (e.g. "0.2.0" vs "0.1.2") segment by
+ * segment, treating a missing trailing segment as 0. Returns <0, 0, or >0
+ * as a precedes, equals, or exceeds b. A non-numeric segment (e.g. a
+ * "-rc1" suffix) stops the comparison there, which is good enough for
+ * this project's plain MAJOR.MINOR.PATCH scheme. */
+static int version_compare(const char *a, const char *b) {
+    while (*a || *b) {
+        char *a_end = NULL, *b_end = NULL;
+        long a_seg = *a ? strtol(a, &a_end, 10) : 0;
+        long b_seg = *b ? strtol(b, &b_end, 10) : 0;
+        if (a_seg != b_seg) {
+            return a_seg < b_seg ? -1 : 1;
+        }
+        a = (a_end && *a_end == '.') ? a_end + 1 : "";
+        b = (b_end && *b_end == '.') ? b_end + 1 : "";
+    }
+    return 0;
 }
 
-/* Percent-encodes a string for safe use as a single path segment or query
- * parameter value, per RFC 3986 (unreserved characters are passed through
- * unchanged, everything else becomes %XX). Returns a newly allocated
- * string, or NULL on allocation failure. */
-static char *url_encode(const char *s) {
-    if (!s) {
-        return strdup("");
+/* Best-effort update check against GitHub Releases: derives the API URL
+ * from REPOQ_REPO_URL (rather than a second hardcoded owner/repo literal)
+ * so it can't drift out of sync with it. Never fails --version just
+ * because GitHub is unreachable or rate-limited; silently skips the
+ * check in that case. */
+static void print_version(void) {
+    printf("repoq %s (%s)\n", REPOQ_VERSION, REPOQ_REPO_URL);
+
+    static const char *gh_prefix = "https://github.com/";
+    if (strncmp(REPOQ_REPO_URL, gh_prefix, strlen(gh_prefix)) != 0) {
+        return;
     }
-    size_t len = strlen(s);
-    char *out = malloc(len * 3 + 1);
-    if (!out) {
-        return NULL;
+    if (http_global_init() != 0) {
+        return;
     }
-    size_t o = 0;
-    for (size_t i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.' || c == '~') {
-            out[o++] = (char)c;
-        } else {
-            snprintf(out + o, 4, "%%%02X", c);
-            o += 3;
+
+    char api_url[256];
+    snprintf(api_url, sizeof(api_url), "https://api.github.com/repos/%s/releases/latest",
+              REPOQ_REPO_URL + strlen(gh_prefix));
+
+    http_response_t resp;
+    char errbuf[256];
+    if (http_get(api_url, &resp, errbuf, sizeof(errbuf)) == 0) {
+        if (resp.status_code == 200) {
+            cJSON *root = cJSON_Parse(resp.data);
+            if (root) {
+                const cJSON *tag = cJSON_GetObjectItemCaseSensitive(root, "tag_name");
+                if (cJSON_IsString(tag) && tag->valuestring) {
+                    const char *latest_tag = tag->valuestring;
+                    const char *latest_ver = (latest_tag[0] == 'v') ? latest_tag + 1 : latest_tag;
+                    int cmp = version_compare(REPOQ_VERSION, latest_ver);
+                    if (cmp == 0) {
+                        printf("You are running the latest release.\n");
+                    } else if (cmp < 0) {
+                        printf("A newer release is available: %s (you have %s)\n", latest_tag, REPOQ_VERSION);
+                    } else {
+                        printf("You are running %s, ahead of the latest published release %s.\n", REPOQ_VERSION, latest_tag);
+                    }
+                }
+                cJSON_Delete(root);
+            }
         }
+        http_response_free(&resp);
     }
-    out[o] = '\0';
-    return out;
+
+    http_global_cleanup();
 }
 
 static char *reserialize_package_list(const package_list_t *list);
@@ -159,7 +198,7 @@ static int cmd_project(const char *project_name, const char *repo_filter, bool j
                     exit_code = 1;
                 }
             } else {
-                output_print_package_table(&list, repo_filter, use_color);
+                output_print_package_table(&list, project_name, repo_filter, use_color);
             }
             package_list_free(&list);
         }
@@ -416,6 +455,10 @@ static int cmd_search(const char *search_term, bool outdated_only, long limit_ar
     return exit_code;
 }
 
+/* Long-only option, so it needs a val outside the getopt_long short-option
+ * char range used below. */
+enum { OPT_COLOR = 256 };
+
 int main(int argc, char **argv) {
     static const struct option long_opts[] = {
         {"repo", required_argument, NULL, 'r'},
@@ -424,6 +467,7 @@ int main(int argc, char **argv) {
         {"limit", required_argument, NULL, 'l'},
         {"json", no_argument, NULL, 'j'},
         {"no-color", no_argument, NULL, 'n'},
+        {"color", optional_argument, NULL, OPT_COLOR},
         {"unique", no_argument, NULL, 'u'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
@@ -434,7 +478,7 @@ int main(int argc, char **argv) {
     const char *search_term = NULL;
     bool outdated_flag = false;
     bool json_flag = false;
-    bool no_color_flag = false;
+    color_mode_t color_mode = COLOR_ALWAYS;
     bool unique_flag = false;
     bool limit_set = false;
     long limit_value = 0;
@@ -467,7 +511,23 @@ int main(int argc, char **argv) {
                 json_flag = true;
                 break;
             case 'n':
-                no_color_flag = true;
+                color_mode = COLOR_NEVER;
+                break;
+            case OPT_COLOR:
+                /* Bare --color (optarg == NULL) means "always", matching
+                 * GNU ls's convention -- the common case is forcing color
+                 * into a pipe (e.g. `| bat`), not "auto" (which is already
+                 * the default and wouldn't need the flag at all). */
+                if (!optarg || strcmp(optarg, "always") == 0) {
+                    color_mode = COLOR_ALWAYS;
+                } else if (strcmp(optarg, "never") == 0) {
+                    color_mode = COLOR_NEVER;
+                } else if (strcmp(optarg, "auto") == 0) {
+                    color_mode = COLOR_AUTO;
+                } else {
+                    fprintf(stderr, "repoq: invalid --color value '%s' (expected always, never, or auto)\n", optarg);
+                    return 2;
+                }
                 break;
             case 'u':
                 unique_flag = true;
@@ -516,7 +576,7 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    bool use_color = output_should_use_color(no_color_flag);
+    bool use_color = output_should_use_color(color_mode);
 
     if (http_global_init() != 0) {
         fprintf(stderr, "repoq: failed to initialize HTTP client\n");

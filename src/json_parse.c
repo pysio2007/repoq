@@ -55,6 +55,37 @@ static void parse_package_object(const cJSON *obj, package_t *pkg) {
     pkg->summary = dup_string_field(obj, "summary");
 }
 
+/* Parses a JSON array of package objects (array_node must satisfy
+ * cJSON_IsArray()) into a freshly populated package_list_t. Used both for
+ * the top-level single-project response and for each project's package
+ * array inside the multi-project response, so the two can't drift apart.
+ * Returns 0 on success (including an empty array), -1 only on allocation
+ * failure, in which case *out is left zeroed. */
+static int parse_package_array(const cJSON *array_node, package_list_t *out) {
+    memset(out, 0, sizeof(*out));
+
+    size_t count = (size_t)cJSON_GetArraySize(array_node);
+    if (count == 0) {
+        return 0;
+    }
+
+    package_t *items = calloc(count, sizeof(package_t));
+    if (!items) {
+        return -1;
+    }
+
+    size_t i = 0;
+    const cJSON *elem = NULL;
+    cJSON_ArrayForEach(elem, array_node) {
+        parse_package_object(elem, &items[i]);
+        i++;
+    }
+
+    out->items = items;
+    out->count = count;
+    return 0;
+}
+
 void package_list_free(package_list_t *list) {
     if (!list) {
         return;
@@ -148,28 +179,13 @@ int json_parse_package_list(const char *json_text, package_list_t *out, char *er
         return -1;
     }
 
-    size_t count = (size_t)cJSON_GetArraySize(root);
-    package_t *items = NULL;
-    if (count > 0) {
-        items = calloc(count, sizeof(package_t));
-        if (!items) {
-            set_err(errbuf, errbuf_len, "out of memory");
-            cJSON_Delete(root);
-            return -1;
-        }
-    }
-
-    size_t i = 0;
-    const cJSON *elem = NULL;
-    cJSON_ArrayForEach(elem, root) {
-        parse_package_object(elem, &items[i]);
-        i++;
+    if (parse_package_array(root, out) != 0) {
+        set_err(errbuf, errbuf_len, "out of memory");
+        cJSON_Delete(root);
+        return -1;
     }
 
     cJSON_Delete(root);
-
-    out->items = items;
-    out->count = count;
     return 0;
 }
 
@@ -219,23 +235,10 @@ int json_parse_project_list(const char *json_text, project_list_t *out, char *er
         np->name = proj_entry->string ? strdup(proj_entry->string) : NULL;
 
         if (cJSON_IsArray(proj_entry)) {
-            size_t pkg_count = (size_t)cJSON_GetArraySize(proj_entry);
-            if (pkg_count > 0) {
-                package_t *pkgs = calloc(pkg_count, sizeof(package_t));
-                if (pkgs) {
-                    size_t j = 0;
-                    const cJSON *pkg_elem = NULL;
-                    cJSON_ArrayForEach(pkg_elem, proj_entry) {
-                        parse_package_object(pkg_elem, &pkgs[j]);
-                        j++;
-                    }
-                    np->packages.items = pkgs;
-                    np->packages.count = pkg_count;
-                }
-                /* On allocation failure we simply leave this project's
-                 * package list empty rather than aborting the whole
-                 * parse; np->packages is already zeroed. */
-            }
+            /* On allocation failure we simply leave this project's
+             * package list empty rather than aborting the whole parse;
+             * parse_package_array() already leaves it zeroed. */
+            parse_package_array(proj_entry, &np->packages);
         }
         i++;
     }
